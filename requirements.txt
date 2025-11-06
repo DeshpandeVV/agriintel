@@ -6,3 +6,4 @@ joblib
 fpdf2
 requests
 google-generativeai
+matplotlib
