@@ -348,12 +348,14 @@ if st.session_state.get("analysis_done", False):
         loc_name = r["loc_name"]; cc = r["cc"]; cur = r["cur"]
         language = r["language"]; region = r["region"]
         daily = r["daily"]
+
         df_16 = pd.DataFrame({
             "date": daily.get("time", []),
             "t_max": daily.get("temperature_2m_max", []),
             "t_min": daily.get("temperature_2m_min", []),
             "precip_mm": daily.get("precipitation_sum", [])
         })
+
         seasonal = r["seasonal"]
         df_month = pd.DataFrame()
         if seasonal and "monthly" in seasonal:
@@ -364,12 +366,11 @@ if st.session_state.get("analysis_done", False):
                 "precip_sum": m.get("precipitation_sum", [])
             }).head(3)
 
-        # Locate a built-in Unicode font (DejaVu Sans from Matplotlib)
+        # Locate built-in DejaVu Unicode font
         font_path = font_manager.findfont("DejaVu Sans", fallback_to_default=True)
 
         pdf = FPDF()
         pdf.add_page()
-        # Register Unicode font
         pdf.add_font("DejaVu", "", font_path, uni=True)
         pdf.set_font("DejaVu", size=12)
 
@@ -385,30 +386,47 @@ if st.session_state.get("analysis_done", False):
         pdf.multi_cell(0, 8, f"Fertilizer (kg/ha): {fert}")
 
         pdf.ln(5)
-        pdf.multi_cell(0, 8,
+        pdf.multi_cell(
+            0, 8,
             f"Weather Now: {cur.get('temperature_2m')}°C | "
             f"{cur.get('relative_humidity_2m')}% humidity | "
             f"{cur.get('precipitation')} mm rainfall"
         )
 
+        # 16-day forecast
         if not df_16.empty:
-            pdf.ln(5); pdf.set_font("DejaVu", size=12); pdf.cell(0, 8, "16-Day Forecast:", ln=True)
+            pdf.ln(5)
+            pdf.set_font("DejaVu", size=12)
+            pdf.cell(0, 8, "16-Day Forecast:", ln=True)
             pdf.set_font("DejaVu", size=10)
-            for _, r2 in df_16.iterrows():
-                pdf.multi_cell(0, 6, f"{r2['date']} → Tmax {r2['t_max']}°C, Tmin {r2['t_min']}°C, Precip {r2['precip_mm']} mm")
+            for _, row in df_16.iterrows():
+                pdf.multi_cell(
+                    0, 6,
+                    f"{row['date']} → Tmax {row['t_max']}°C, Tmin {row['t_min']}°C, Precip {row['precip_mm']} mm"
+                )
 
+        # Seasonal forecast
         if not df_month.empty:
-            pdf.ln(5); pdf.set_font("DejaVu", size=12); pdf.cell(0, 8, "3-Month Seasonal Outlook:", ln=True)
+            pdf.ln(5)
+            pdf.set_font("DejaVu", size=12)
+            pdf.cell(0, 8, "3-Month Seasonal Outlook:", ln=True)
             pdf.set_font("DejaVu", size=10)
-            for _, r3 in df_month.iterrows():
-                pdf.multi_cell(0, 6, f"{r3['month']} → Temp Mean {r3['temp_mean']}°C, Rainfall {r3['precip_sum']} mm")
+            for _, row in df_month.iterrows():
+                pdf.multi_cell(
+                    0, 6,
+                    f"{row['month']} → Temp Mean {row['temp_mean']}°C, Rainfall {row['precip_sum']} mm"
+                )
 
-        pdf.ln(5); pdf.set_font("DejaVu", size=12); pdf.cell(0, 8, "AI Explanation:", ln=True)
+        # ✅ AI Explanation (fixed)
+        pdf.ln(5)
+        pdf.set_font("DejaVu", size=12)
+        pdf.cell(0, 8, "AI Explanation:", ln=True)
         pdf.set_font("DejaVu", size=10)
-        for line in explanation.split("
-"):
+
+        for line in explanation.split("\n"):
             pdf.multi_cell(0, 6, line)
 
+        # Save + download
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             pdf.output(tmp.name)
             tmp.seek(0)
