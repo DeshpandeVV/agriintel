@@ -7,6 +7,7 @@ import numpy as np
 import joblib
 import streamlit as st
 from fpdf import FPDF
+import tempfile
 import google.generativeai as genai
 
 # =========================================================
@@ -125,7 +126,6 @@ def geocode(place):
                      params={"name": place, "count": 1})
     r.raise_for_status()
     data = r.json()
-
     if data.get("results"):
         d = data["results"][0]
         return d["latitude"], d["longitude"], d["name"], d["country_code"]
@@ -173,8 +173,7 @@ def predict_fertilizer(crop):
     feats = getattr(fert_model, "feature_names_in_", [])
     row = {f: 0 for f in feats}
 
-    base_vals = {"N": N, "P": P, "K": K}
-    for k, v in base_vals.items():
+    for k, v in {"N": N, "P": P, "K": K}.items():
         if k in row:
             row[k] = v
 
@@ -199,14 +198,13 @@ def predict_yield(crop):
     feats = getattr(yield_model, "feature_names_in_", [])
     row = {f: 0 for f in feats}
 
-    vals = {
+    for k, v in {
         "N": N, "P": P, "K": K,
         "temperature": temperature,
         "humidity": humidity,
         "ph": ph,
         "rainfall": rainfall
-    }
-    for k, v in vals.items():
+    }.items():
         if k in row:
             row[k] = v
 
@@ -218,17 +216,15 @@ def predict_yield(crop):
     return round(float(yield_model.predict(X)[0]), 2)
 
 # =========================================================
-# RUN
+# ANALYZE BUTTON
 # =========================================================
-if st.button("🔍 Analyze & Fetch Weather"):
+analyze_clicked = st.button("🔍 Analyze & Fetch Weather")
 
-    # --- GEO + WEATHER ---
+if analyze_clicked:
     try:
         lat, lon, loc_name, cc = geocode(region)
-
         realtime = get_realtime_and_daily(lat, lon)
 
-        # ✅ SAFE seasonal (no crash)
         try:
             seasonal = get_seasonal_monthly(lat, lon)
         except:
@@ -238,24 +234,36 @@ if st.button("🔍 Analyze & Fetch Weather"):
         st.error(f"Weather lookup failed: {e}")
         st.stop()
 
-    # --- PREDICTIONS ---
     crop = predict_crop()
     fert = predict_fertilizer(crop)
     soil_h = predict_soil()
     y_pred = predict_yield(crop)
 
-    # --- METRICS ---
+    # Store in session for PDF
+    st.session_state.analysis_done = True
+    st.session_state._results = {
+        "crop": crop,
+        "fert": fert,
+        "soil": soil_h,
+        "yield": y_pred,
+        "loc_name": loc_name,
+        "cc": cc,
+        "cur": realtime.get("current", {}),
+        "daily": realtime.get("daily", {}),
+        "seasonal": seasonal
+    }
+
+    # ---------- DISPLAY ----------
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Recommended Crop", crop)
     c2.metric("Predicted Yield", f"{y_pred} t/ha")
     c3.metric("Soil Health", soil_h)
     c4.metric("Location", f"{loc_name} ({cc})")
 
-    st.markdown("### 🧪 Fertilizer Recommendation (kg/ha)")
+    st.markdown("### 🧪 Fertilizer (kg/ha)")
     st.table(pd.DataFrame([fert]))
 
-    # --- REAL-TIME WEATHER ---
-    cur = realtime.get("current", {})
+    cur = st.session_state._results["cur"]
     st.markdown("### 🌤️ Real-time Weather")
     st.write({
         "Temperature (°C)": cur.get("temperature_2m"),
@@ -263,19 +271,19 @@ if st.button("🔍 Analyze & Fetch Weather"):
         "Precipitation (mm)": cur.get("precipitation")
     })
 
-    # --- 16-DAY FORECAST ---
-    daily = realtime.get("daily", {})
+    daily = st.session_state._results["daily"]
     df_16 = pd.DataFrame({
         "date": daily.get("time", []),
         "t_max": daily.get("temperature_2m_max", []),
         "t_min": daily.get("temperature_2m_min", []),
         "precip_mm": daily.get("precipitation_sum", [])
     })
+
     if not df_16.empty:
         st.markdown("### 📅 16-Day Forecast")
         st.dataframe(df_16)
 
-    # --- SAFE SEASONAL ---
+    seasonal = st.session_state._results["seasonal"]
     df_month = pd.DataFrame()
 
     if seasonal and "monthly" in seasonal:
@@ -286,57 +294,78 @@ if st.button("🔍 Analyze & Fetch Weather"):
                 "temp_mean": m.get("temperature_2m_mean", []),
                 "precip_sum": m.get("precipitation_sum", [])
             })
-
-            if len(df_month) > 3:
-                df_month = df_month.head(3)
-
+            df_month = df_month.head(3)
             st.markdown("### 📈 3-Month Seasonal Averages")
             st.dataframe(df_month)
-
         except:
             st.info("Seasonal forecast not available.")
-    else:
-        st.info("Seasonal forecast unavailable for this region/date.")
 
-    # --- GEMINI EXPLANATION ---
     prompt = f"""
-    Explain the following agricultural insights in simple {language}:
+    Explain this to a farmer in {language}:
 
-    Region: {loc_name}, {cc}
     Recommended Crop: {crop}
     Soil Health: {soil_h}
-    Fertilizer (kg/ha): N={fert['delta_N']}, P={fert['delta_P']}, K={fert['delta_K']}
-    Predicted Yield: {y_pred} t/ha
+    Fertilizer NPK: {fert}
+    Predicted Yield: {y_pred}
 
-    Real-time Weather:
-    Temperature: {cur.get('temperature_2m')}°C
-    Humidity: {cur.get('relative_humidity_2m')}%
-    Precipitation: {cur.get('precipitation')} mm
+    Real-time weather:
+    {cur}
 
-    16-day forecast average Tmax: {df_16['t_max'].mean() if not df_16.empty else 'NA'}
-    Total precipitation (16 days): {df_16['precip_mm'].sum() if not df_16.empty else 'NA'} mm
+    16-day forecast summary:
+    {df_16.to_dict(orient='records')}
 
-    Seasonal 3-month forecast (if available):
+    Seasonal (3-month) outlook:
     {df_month.to_dict(orient='records')}
 
-    Provide:
-    ✅ Simple explanation  
-    ✅ Bullet points  
-    ✅ Recommendations  
-    ✅ Warnings (if needed)
+    Keep it simple, clear, and helpful.
     """
 
-    explanation = gemini_text(prompt, fallback="(AI explanation unavailable — add GEMINI_API_KEY in Secrets.)")
+    explanation = gemini_text(prompt)
+    st.session_state._explanation = explanation
 
     st.markdown("### 🗣️ AI Explanation")
     st.write(explanation)
 
-    # --- PDF REPORT ---
+# =========================================================
+# ✅ PDF DOWNLOAD — OUTSIDE ANALYZE BLOCK
+# =========================================================
+if st.session_state.get("analysis_done", False):
+
     if st.button("📄 Download PDF Report"):
+
+        r = st.session_state._results
+        explanation = st.session_state._explanation
+
+        crop = r["crop"]
+        fert = r["fert"]
+        soil_h = r["soil"]
+        y_pred = r["yield"]
+        loc_name = r["loc_name"]
+        cc = r["cc"]
+        cur = r["cur"]
+
+        daily = r["daily"]
+        df_16 = pd.DataFrame({
+            "date": daily.get("time", []),
+            "t_max": daily.get("temperature_2m_max", []),
+            "t_min": daily.get("temperature_2m_min", []),
+            "precip_mm": daily.get("precipitation_sum", [])
+        })
+
+        seasonal = r["seasonal"]
+        df_month = pd.DataFrame()
+        if seasonal and "monthly" in seasonal:
+            m = seasonal["monthly"]
+            df_month = pd.DataFrame({
+                "month": m.get("time", []),
+                "temp_mean": m.get("temperature_2m_mean", []),
+                "precip_sum": m.get("precipitation_sum", [])
+            }).head(3)
+
+        # ✅ GENERATE PDF
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Arial", size=12)
-
         pdf.cell(0, 10, "AgriIntel Smart Report", ln=True, align="C")
         pdf.ln(5)
 
@@ -346,28 +375,37 @@ if st.button("🔍 Analyze & Fetch Weather"):
         pdf.multi_cell(0, 8, f"Recommended Crop: {crop}")
         pdf.multi_cell(0, 8, f"Predicted Yield: {y_pred} t/ha")
         pdf.multi_cell(0, 8, f"Soil Health: {soil_h}")
-        pdf.multi_cell(0, 8, f"Fertilizer Recommendation (kg/ha): N={fert['delta_N']}, P={fert['delta_P']}, K={fert['delta_K']}")
+        pdf.multi_cell(0, 8, f"Fertilizer (kg/ha): {fert}")
 
         pdf.ln(5)
-        pdf.set_font("Arial", size=11)
-        pdf.multi_cell(0, 8, f"Current Weather: {cur.get('temperature_2m')}°C, {cur.get('relative_humidity_2m')}% humidity, {cur.get('precipitation')} mm precipitation")
+        pdf.multi_cell(0, 8,
+                       f"Real-time Weather: {cur.get('temperature_2m')}°C, "
+                       f"{cur.get('relative_humidity_2m')}% humidity, "
+                       f"{cur.get('precipitation')} mm precipitation")
 
+        # 16-day forecast
         if not df_16.empty:
             pdf.ln(5)
             pdf.set_font("Arial", "B", 12)
             pdf.cell(0, 8, "16-Day Forecast:", ln=True)
             pdf.set_font("Arial", "", 10)
-            for _, r in df_16.iterrows():
-                pdf.multi_cell(0, 6, f"{r['date']} → Tmax {r['t_max']}°C | Tmin {r['t_min']}°C | Precip {r['precip_mm']} mm")
+            for _, r2 in df_16.iterrows():
+                pdf.multi_cell(0, 6,
+                               f"{r2['date']} → Tmax {r2['t_max']}°C | "
+                               f"Tmin {r2['t_min']}°C | Precip {r2['precip_mm']} mm")
 
+        # Seasonal
         if not df_month.empty:
             pdf.ln(5)
             pdf.set_font("Arial", "B", 12)
             pdf.cell(0, 8, "3-Month Seasonal Outlook:", ln=True)
             pdf.set_font("Arial", "", 10)
-            for _, r in df_month.iterrows():
-                pdf.multi_cell(0, 6, f"{r['month']} → Temp Mean {r['temp_mean']}°C | Precip Sum {r['precip_sum']} mm")
+            for _, r3 in df_month.iterrows():
+                pdf.multi_cell(0, 6,
+                               f"{r3['month']} → Temp Mean {r3['temp_mean']}°C | "
+                               f"Precip Sum {r3['precip_sum']} mm")
 
+        # AI explanation
         pdf.ln(5)
         pdf.set_font("Arial", "B", 12)
         pdf.cell(0, 8, "AI Explanation:", ln=True)
@@ -375,9 +413,13 @@ if st.button("🔍 Analyze & Fetch Weather"):
         for line in explanation.split("\n"):
             pdf.multi_cell(0, 6, line)
 
-        file_path = "AgriIntel_Report.pdf"
-        pdf.output(file_path)
-
-        with open(file_path, "rb") as f:
-            st.download_button("⬇️ Download PDF", f, file_name="AgriIntel_Report.pdf",
-                               mime="application/pdf")
+        # ✅ TEMP FILE FOR STREAMLIT
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            pdf.output(tmp.name)
+            tmp.seek(0)
+            st.download_button(
+                label="⬇️ Download PDF",
+                data=tmp.read(),
+                file_name="AgriIntel_Report.pdf",
+                mime="application/pdf"
+            )
