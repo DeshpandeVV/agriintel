@@ -3,7 +3,8 @@ pandas
 numpy
 scikit-learn
 joblib
-fpdf2
 requests
-google-generativeai
+fpdf2
 matplotlib
+qrcode[pil]
+google-generativeai
