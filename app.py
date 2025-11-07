@@ -378,12 +378,11 @@ if analyze_clicked:
 # PDF DOWNLOAD — Agriculture theme, Unicode-safe & wrapped
 # =========================================================
 def safe_wrap(text, width=95):
-    """Wrap long text safely for FPDF multi_cell."""
     lines = []
     for para in (text or "").splitlines():
         para = para.replace("\t", "    ")
         if not para.strip():
-            lines.append("")  # preserve blank lines
+            lines.append("")  # blank line
         else:
             lines.extend(textwrap.wrap(para, width=width, break_long_words=True, break_on_hyphens=False))
     return lines
@@ -399,6 +398,7 @@ if st.session_state.get("analysis_done", False):
         loc_name, cc, language, region = r["loc_name"], r["cc"], r["language"], r["region"]
         lat, lon = r["lat"], r["lon"]
         cur = r["cur"]
+
         daily = r["daily"]
         df_16 = pd.DataFrame({
             "date": daily.get("time", []),
@@ -406,6 +406,7 @@ if st.session_state.get("analysis_done", False):
             "t_min": daily.get("temperature_2m_min", []),
             "precip_mm": daily.get("precipitation_sum", [])
         })
+
         seasonal = r["seasonal"]
         df_month = pd.DataFrame()
         if seasonal and "monthly" in seasonal:
@@ -427,57 +428,65 @@ if st.session_state.get("analysis_done", False):
         pdf.add_font("DejaVu", "", font_path, uni=True)
         pdf.set_font("DejaVu", size=12)
 
+        # ✅ SAFE FIX FOR WIDTH
+        pdf.set_left_margin(8)
+        pdf.set_right_margin(8)
+        usable_width = pdf.w - pdf.l_margin - pdf.r_margin
+
         # Title
-        pdf.cell(0, 10, "AgriIntel Advisory Report", ln=True, align="C")
+        pdf.cell(usable_width, 10, "AgriIntel Advisory Report", ln=True, align="C")
         pdf.ln(2)
         pdf.set_font("DejaVu", size=10)
-        pdf.multi_cell(0, 7, f"Region: {region} | Location: {loc_name}, {cc} | Coordinates: {lat}, {lon}")
+        pdf.multi_cell(usable_width, 7, f"Region: {region} | Location: {loc_name}, {cc} | Coordinates: {lat}, {lon}")
 
-        # Key metrics
+        # Summary
         pdf.ln(3)
         pdf.set_font("DejaVu", size=11)
-        pdf.cell(0, 8, "Summary", ln=True)
+        pdf.cell(usable_width, 8, "Summary", ln=True)
         pdf.set_font("DejaVu", size=10)
-        pdf.multi_cell(0, 6, f"Recommended Crop: {crop}")
-        pdf.multi_cell(0, 6, f"Predicted Yield: {y_pred} t/ha")
-        pdf.multi_cell(0, 6, f"Soil Health: {soil_h}")
-        pdf.multi_cell(0, 6, f"Fertilizer Plan (kg/ha): N={fert['delta_N']}, P={fert['delta_P']}, K={fert['delta_K']}")
+        pdf.multi_cell(usable_width, 6, f"Recommended Crop: {crop}")
+        pdf.multi_cell(usable_width, 6, f"Predicted Yield: {y_pred} t/ha")
+        pdf.multi_cell(usable_width, 6, f"Soil Health: {soil_h}")
+        pdf.multi_cell(usable_width, 6, f"Fertilizer Plan (kg/ha): N={fert['delta_N']}, P={fert['delta_P']}, K={fert['delta_K']}")
 
         # Weather now
         pdf.ln(3)
         pdf.set_font("DejaVu", size=11)
-        pdf.cell(0, 8, "Weather (Now)", ln=True)
+        pdf.cell(usable_width, 8, "Weather (Now)", ln=True)
         pdf.set_font("DejaVu", size=10)
-        pdf.multi_cell(0, 6, f"Temperature: {cur.get('temperature_2m')}°C")
-        pdf.multi_cell(0, 6, f"Humidity: {cur.get('relative_humidity_2m')}%")
-        pdf.multi_cell(0, 6, f"Precipitation: {cur.get('precipitation')} mm")
+        pdf.multi_cell(usable_width, 6, f"Temperature: {cur.get('temperature_2m')}°C")
+        pdf.multi_cell(usable_width, 6, f"Humidity: {cur.get('relative_humidity_2m')}%")
+        pdf.multi_cell(usable_width, 6, f"Precipitation: {cur.get('precipitation')} mm")
 
-        # 16-day
+        # 16-day forecast
         if not df_16.empty:
             pdf.ln(3)
-            pdf.set_font("DejaVu", size=11); pdf.cell(0, 8, "16-Day Forecast", ln=True)
+            pdf.set_font("DejaVu", size=11)
+            pdf.cell(usable_width, 8, "16-Day Forecast", ln=True)
             pdf.set_font("DejaVu", size=9)
             for _, row in df_16.iterrows():
-                text = f"{row['date']} → Tmax {row['t_max']}°C, Tmin {row['t_min']}°C, Precip {row['precip_mm']} mm"
-                for seg in safe_wrap(text, width=100):
-                    pdf.multi_cell(0, 5, seg)
+                text = f"{row['date']} → Tmax {row['t_max']}°C | Tmin {row['t_min']}°C | Rain {row['precip_mm']} mm"
+                for seg in safe_wrap(text, width=95):
+                    pdf.multi_cell(usable_width, 5, seg)
 
         # Seasonal
         if not df_month.empty:
             pdf.ln(3)
-            pdf.set_font("DejaVu", size=11); pdf.cell(0, 8, "3-Month Seasonal Outlook", ln=True)
+            pdf.set_font("DejaVu", size=11)
+            pdf.cell(usable_width, 8, "3-Month Seasonal Outlook", ln=True)
             pdf.set_font("DejaVu", size=9)
             for _, row in df_month.iterrows():
-                text = f"{row['month']} → Temp Mean {row['temp_mean']}°C, Rainfall {row['precip_sum']} mm"
-                for seg in safe_wrap(text, width=100):
-                    pdf.multi_cell(0, 5, seg)
+                text = f"{row['month']} → Temp {row['temp_mean']}°C | Rain {row['precip_sum']} mm"
+                for seg in safe_wrap(text, width=95):
+                    pdf.multi_cell(usable_width, 5, seg)
 
-        # Detailed AI report (Gemini)
+        # Detailed Gemini advisory
         pdf.ln(3)
-        pdf.set_font("DejaVu", size=11); pdf.cell(0, 8, "Detailed AI Advisory", ln=True)
+        pdf.set_font("DejaVu", size=11)
+        pdf.cell(usable_width, 8, "Detailed AI Advisory", ln=True)
         pdf.set_font("DejaVu", size=10)
-        for seg in safe_wrap(explanation_long, width=95):
-            pdf.multi_cell(0, 5.5, seg)
+        for seg in safe_wrap(explanation_long, width=90):
+            pdf.multi_cell(usable_width, 5.5, seg)
 
         # Save + Download
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
